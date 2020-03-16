@@ -280,7 +280,8 @@ ROC_func <- function(input_df) {
   
 
   roc_curve <- ggplot(data = roc_df, aes(x = FPR, y = TPR)) + 
-                geom_line(color = "dodger blue") +
+                geom_point() +
+                geom_path(color = "dodger blue") +
                 ggtitle("ROC Curve") +
                 xlab("False Positive Rate (FPR)") + 
                 ylab("True Positive Rate (TPR)") +
