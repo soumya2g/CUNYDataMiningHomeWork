@@ -1,0 +1,737 @@
+---
+title: "DATA 621 - Homework3 - Crime Rate Prediction"
+author: "Soumya Ghosh"
+date: "March 28, 2020"
+always_allow_html: yes
+output:
+  pdf_document: default
+  html_document:
+    df_print: kable
+    theme: cerulean
+    highlight: pygments
+    css: ./lab.css
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r warning=FALSE, message=FALSE}
+library(kableExtra)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(corrplot)
+library(RColorBrewer)
+library(GGally)
+library(ggResidpanel)
+library(psych)
+library(mice)
+library(reshape2)
+library(cowplot)
+library(car)
+library(caTools)
+library(VIM)
+library(broom)
+library(pROC)
+library(caret)
+library(geoR)
+library(moments)
+library(glmulti)
+```
+
+## Introduction
+
+In this homework assignment, we will explore, analyze and model a data set containing information on crime for various neighborhoods of a major city. Each record has a response variable indicating whether or not the crime rate is above the median crime rate (1) or not (0). Our training data comprises 466 observations and 13 variables.
+
+## Objective
+
+Our objective is to build a binary logistic regression model on the training data set to predict whether the neighborhood will be at risk for high crime levels. You will provide classifications and probabilities for the evaluation data set using your binary logistic regression model. You can only use the variables given to you (or variables that you derive from the variables provided). Below is a short description of the data set:
+
+
+![](https://github.com/soumya2g/CUNYDataMiningHomeWork/blob/master/HomeWork_3/Images/DataTable.png?raw=true)
+
+
+## Data Load
+
+Loaded Training and Evalutaion data sets into respective data frames.
+
+```{r}
+train_df <- read.csv("https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_3/DataFiles/crime-training-data_modified.csv")
+
+eval_df <- read.csv("https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_3/DataFiles/crime-evaluation-data_modified.csv")
+
+```
+## Training Data
+
+Sample snapshot of training data frame -
+
+```{r}
+
+head(train_df, 20) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+str(train_df)
+
+```
+
+## PART I: Data Exploration
+
+We wanted to start off data exploration process with high level descriptive statistical summary and missing/exception value analysis. 
+
+### Descriptive Statistical Summary
+
+Basic statistical summary of all features and dependant variable (TARGET_WINS).
+
+```{r}
+
+stat_summary <- function(df){
+  df %>%
+    summary() %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+    scroll_box(width="100%",height="400px")
+}
+stat_summary(train_df)
+
+```
+We also used describe() function of 'psych' package to summarize additional statistical measurements like Standard Deviation, Skewness, Kurtois, Standard Error etc.
+
+
+```{r}
+stat_desc <- function(df){
+df %>% 
+    describe() %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+}
+
+stat_desc(train_df)
+
+```
+### Missing Value Analysis
+
+Below are the features that has NA values. It is clear from the table below, TEAM_BATTING_HBP(>90%) and TEAM_BASERUN_CS (>33%) have significant NA Values -
+
+```{r}
+## Counts of missing data per feature
+train_na_df <- data.frame(apply(train_df, 2, function(x) length(which(is.na(x)))))
+train_na_df1 <- data.frame(apply(train_df, 2,function(x) {sum(is.na(x)) / length(x) * 100}))
+
+train_na_df <- cbind(Feature = rownames(train_na_df), train_na_df, train_na_df1)
+colnames(train_na_df) <- c('Feature Name','No. of NA Recocrds','Percentage of NA Records')
+rownames(train_na_df) <- NULL
+
+
+train_na_df%>% filter(`No. of NA Recocrds` != 0) %>% arrange(desc(`No. of NA Recocrds`)) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+
+
+```
+Based on the above empty table, there are no missing records. So we have a coplete data set to work with.
+
+
+### Descriptive Statistical Plots
+
+#### Box Plots
+
+```{r fig.height=10, fig.width=10, warning=FALSE, message=FALSE}
+
+## Box plots:
+gb1 <- ggplot(data = train_df, aes(y = target)) + geom_boxplot()
+gb2 <- ggplot(data = train_df, aes(y = zn)) + geom_boxplot()
+gb3 <- ggplot(data = train_df, aes(y = indus)) + geom_boxplot()
+gb4 <- ggplot(data = train_df, aes(y = chas)) + geom_boxplot()
+gb5 <- ggplot(data = train_df, aes(y = nox)) + geom_boxplot()
+gb6 <- ggplot(data = train_df, aes(y = rm)) + geom_boxplot()
+gb7 <- ggplot(data = train_df, aes(y = age)) + geom_boxplot()
+gb8 <- ggplot(data = train_df, aes(y = dis)) + geom_boxplot()
+gb9 <- ggplot(data = train_df, aes(y = rad)) + geom_boxplot()
+gb10 <- ggplot(data = train_df, aes(y = tax)) + geom_boxplot()
+gb11 <- ggplot(data = train_df, aes(y = ptratio)) + geom_boxplot()
+gb12 <- ggplot(data = train_df, aes(y = lstat)) + geom_boxplot()
+gb13 <- ggplot(data = train_df, aes(y = medv)) + geom_boxplot()
+
+
+plot_grid(gb1, gb2, gb3, gb4, gb5, gb6, gb7, gb8, gb9, gb10,
+          gb11, gb12, gb13, labels = "AUTO, scale = 8")
+
+```
+
+
+#### Density Plots
+
+```{r fig.height=8, fig.width=10}
+train_df %>%
+  gather(variable, value, target:zn) %>%
+  ggplot(., aes(value)) + 
+  geom_density(fill = "dodgerblue4", color="dodgerblue4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+
+```
+
+### Observations Summary 
+
+- Our dependant variable **target** is a binary variable as expected. There another bunary dummy variable **chas** 
+- Four of the predictors are expressed as proportions, with values ranging from 0 to 100:
+  - zn
+  - indus
+  - age
+  - lstat
+- **indus, rad** and **tax** features are showing bi-modal distribution
+- Some of the features like **dis, lstat, nox and zn** are right skewed
+- **age** and **ptratio** are left skewed
+- The variable rad is described as an index value of accessibility to radial highways. We assume this variable is an ordinal data type
+
+
+## PART II: Data Preparation
+
+### Correlation Plot
+
+```{r fig.height=10, fig.width=10}
+
+corrMatrix <- round(cor(train_df),4)
+
+corrMatrix %>% corrplot(., method = "color", outline = T, addgrid.col = "darkgray", order="hclust", addrect = 4, rect.col = "black", rect.lwd = 5,cl.pos = "b", tl.col = "indianred4", tl.cex = 1.0, cl.cex = 1.0, addCoef.col = "white", number.digits = 2, number.cex = 0.8, col = colorRampPalette(c("darkred","white","dodgerblue4"))(100))
+
+```
+Based on the Correlation plot above, there is a high degree of collinearity amogst independent variables like **rad, tax, indus, dis, nox** etc.
+
+### Handling multicollinearity
+
+**indus and nox:** correlation value of 0.76. This result makes sense, as we expect areas with dense industry concentration to have higher environmental pollutants such as NO2.
+
+**dis and nox:** correlation value of -0.77. This result is consistent with our intuition: we expect areas close to employment centers to have higher concentrations of environmental pollutants, and areas farther away to have lower concentrations.
+
+**rad and tax:** These two variables are strongly correlated (91%). Access to radial highways and tax rates appear are strongly correlated values. We are particularly concerned about the multicollinearity effects of these two variables. The fact that these two variables are nearly perfectly correlated indicates that one of them can legitimately be removed from the data set, and we chose **rad** to be removed from our model for further analysis.
+
+
+```{r}
+train_df <- train_df %>% dplyr::select(-c(rad))
+eval_df <- eval_df %>% dplyr::select(-c(rad))
+
+```
+#### Pair-wise Relationships  
+  
+Let's look at scatter plot/correlation matrix to get a better feel for the relationships between pairs of variables.  In the figure below, we plotted the high crime areas in blue and the low crime areas in green.  We also included a loess curve in the scatter plots to get a better feel for the relationship between variables.    
+  
+```{r fig.retina=1, fig.width=15, fig.height=15}
+cols = c('red','blue')
+train_df$target_mod <- factor(ifelse(train_df$target == 1 , 'y', 'n'))
+
+panel.cor <- function(x,y, digits = 2, cex.cor, ...) {
+  usr <- par("usr"); on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r <- cor(x,y)
+  txt <- format(c(r, 0.123456789), digits = digits)[1]
+  text(0.5,0.5, txt, cex =sqrt(abs(r*6)))
+  
+}
+pairs(train_df[,1:12],  col= cols[train_df$target_mod], gap=0.3, lower.panel = panel.smooth, upper.panel = panel.cor, cex.labels = 3)
+```
+
+Per the above par plot, there are some complex, non-linear LOESS curve shapes for some of the predictor variables against the response variable -
+
+- **rm:** The LOESS curve initially indicates a negative relationship between the number of rooms and the crime rate category. However, when the number of rooms exceeds approximately 7, the relationship becomes positive. This strange LOESS curve shape is most likely the result of the model fitting to sparse data, as there are only about 30 observations with an average room count in excess of 7. 
+
+- **ptratio:** Normally we would expect crime rates to be higher in areas with high pupil-teacher ratios. However, the LOESS curve initially indicates an increasing propensity for high crime rates with increases to the this ptratio. Because this variable is left skewed with a high density of ratios clustered around 20, we believe this unusual curve shape is due to the LOESS model fitting to sparse data at low ratio values.
+
+- **medv:** We expect high median home values to be associated with higher median values. This pattern appears to hold in our LOESS curve for median values below approximately $30k. The pattern then reverses for values above $30k. Once again, we believe this pattern reversal is due to sparse data. The variable medv is right skewed, with relatively few data observations where the median value exceeds 30k
+
+### Feature Engineering
+
+In binary logistic regression, it is desirable to have predictor variables that are normally distributed, whenever possible. The data in the crime dataset presents some factors that would lead us to have to perform some "Transformations" on the data. These transformation include adding categorical variables, log of variables, and adding power transformations etc.
+
+**age:** This variable is left skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$age)
+```
+
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$age)
+```
+
+We apply the suggested power transformation of 1.3 and store in a new variable, `age_new`.  
+
+**dis:** This variable is right skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$dis)
+```
+
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$dis)
+
+```
+
+Given that the value of the lambda parameter is fairly close to 0, we will use the log transformation and save to results to a new variable, `dis_new`.
+
+**indus:** This variable has a bimodal distribution with values clustered around two ranges. Basic power transformation will not result in approximate normal distribution. Also, based on the pairwise plot, high crime rates are primarily concentrated in high industry areas. Hence, we decided to add a categorical variable indus_high_ind with 1 and 0 with a cut-off point of 14 which is approximately in the middle of two mode centers.   
+
+**lstat:** This variable is right skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$lstat)
+```
+
+
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$lstat)
+
+```
+
+Based on this output, we create a new variable `lstat_new`, that applies a quarter root transformation to the original variable.
+
+**medv:**  This variable is right skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$medv)
+```
+
+
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$medv)
+
+```
+
+Based on this output, we create a new variable `medv_new`, that applies a quarter root transformation to the original variable. 
+
+**nox:** This variable is moderately right skewed. We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$nox)
+```
+
+Based on the box-cox procedure output, We will create a new variable `nox_inv`, that is the reciprocal of the raw nox value. We then multiply the reciprocal by -1 to preserve the direction of the original relationship.
+
+
+**ptratio:** This variable is moderately left skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$ptratio)
+```
+
+
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$ptratio)
+
+```
+
+The suggested power transformation of 4 does not correct the the left skew, and its implementation also creates unusually large, transformed ptratio values(e.g. 200,000 and higher). Therefore, We will forgo the power transformation for the sake of simplicity. 
+
+**rm:** This variable is moderately right skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$rm)
+```
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$rm)
+
+```
+
+Based on this output, we create a new variable rm_new`, that applies a quarter root transformation to the original variable.
+
+**tax:** The variable tax also has a bi-modal shape, with values densely clustered around 300 and 700 with no values recording in the training data between between 470 and 665. Because power transformations have limited effectiveness in approximating a normal distribution, we'll create a new categorical variable, `tax_high_ind`, that assigns a value of 1 when the tax value is greater than or equal to 500, and 0 otherwise. The 500 cutoff reflects an approximate halfway point between the two modal centers.
+
+
+```{r}
+feature_engineering <- function(df){
+
+  df$age_new  <- df$age^1.3
+  df$dis_new <- log(df$dis)
+  df$indus_high_ind <- ifelse(df$indus <= 14, 0, 1)
+  df$lstat_new <- df$lstat^0.25
+  df$medv_new <- df$medv^0.25
+  df$nox_inv <- -1/df$nox
+  df$rm_new <- df$rm^0.25
+  df$tax_high_ind <- ifelse(df$tax <= 500, 0, 1)
+
+  return(df)
+}
+
+train_df <- feature_engineering(train_df)
+eval_df <- feature_engineering(eval_df)
+
+```
+
+### Data Preparation Results
+
+After making feature removal and additional feature engineering steps, below is the summary of all  available features -
+
+```{r fig.height=8, fig.width=10}
+stat_desc(train_df)
+
+str(train_df)
+
+```
+```{r fig.retina=1, fig.width=15, fig.height=15}
+cols = c('red','blue')
+
+pairs(train_df[,c(1, 16, 3, 19:20, 14:15, 21, 9, 17:18, 12)],  col= cols[train_df$target_mod], gap=0.3, lower.panel = panel.smooth, upper.panel = panel.cor, cex.labels = 3)
+```
+
+Based on above plot, below feature pairs are showing high degree of colinearity -
+
+ - `nox_inv` and `age_new`: 0.80  
+ - `nox_inv` and `dis_new`: -0.88  
+ - `lstat_new` and `medv_new`: -0.83  
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. So let's review VIFs -
+
+```{r}
+lm_model <- lm(target ~ . ,data=train_df[,c(1, 16, 3, 19:20, 14:15, 21, 9, 17:18, 12)])
+vif(lm_model)
+```
+
+Due to VIF scores above 5, `nox_inv`, dis_new and `lstat_new` may not be used together in a model.
+
+```{r}
+train_df <- train_df %>% dplyr::select(-c(target_mod))
+```
+
+
+## PART III: Building Models
+
+### Test train approach
+
+We have divided the traning dataset into training and test sets using a 80/20 split. We will build our models on the training set and evaluate it on the test set.
+
+```{r}
+set.seed(123)
+split <- sample.split(train_df$target, SplitRatio = 0.8)
+training_set <- subset(train_df, split == TRUE)
+test_set <- subset(train_df, split == FALSE)
+
+```
+Below is the list of complete list of variables before we embark on Model building process -
+
+```{r}
+str(training_set)
+```
+
+We will build four different models to see which one yields the best performance. 
+
+
+### Model 1:
+
+We will start off with a model with all the original variables excluding any derived features -
+
+```{r}
+baseline_logit_model <- glm(target~. - age_new - dis_new - indus_high_ind - lstat_new -medv_new - nox_inv - rm_new - tax_high_ind,family="binomial",data=training_set)
+
+summary(baseline_logit_model) 
+
+```
+
+
+#### Model Statistics
+
+```{r}
+
+test_set$baseline_logit_model <- ifelse(predict.glm(baseline_logit_model, test_set,"response") >= 0.5,1,0)
+cm_model1 <- confusionMatrix(factor(test_set$baseline_logit_model), factor(test_set$target),"1")
+
+cm_model1
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(baseline_logit_model)
+```
+
+#### AUC Curve
+
+
+```{r}
+
+rocCurve <- roc(response = test_set$target, 
+                predictor = test_set$baseline_logit_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+# Model Stats
+results <- tibble(model = "baseline_logit_model",predictors = 11,F1 = cm_model1$byClass[7],
+                  deviance=baseline_logit_model$deviance, 
+                  r2 = 1 - baseline_logit_model$deviance/baseline_logit_model$null.deviance,
+                  aic=baseline_logit_model$aic, auc = auc(rocCurve), AICc = aicc(baseline_logit_model))
+
+model <- as.data.frame(glance(baseline_logit_model))
+
+results <- cbind(results, model)
+
+```
+
+
+
+### Model 2:
+
+In the 2nd model, we have added all the variables including the derived features.
+
+```{r}
+full_logit_model <- glm(target~. ,family="binomial",data=training_set)
+
+summary(full_logit_model) 
+
+```
+
+
+#### Model Statistics
+
+```{r}
+test_set$full_logit_model <- ifelse(predict.glm(full_logit_model, test_set,"response") >= 0.5,1,0)
+cm_model2 <- confusionMatrix(factor(test_set$full_logit_model), factor(test_set$target),"1")
+
+cm_model2
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(full_logit_model)
+```
+
+#### AUC Curve
+
+
+```{r}
+
+rocCurve <- roc(response = test_set$target, 
+                predictor = test_set$full_logit_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+
+
+# Model Stats
+results_2 <- tibble(model = "full_logit_model",predictors = 19,F1 = cm_model2$byClass[7],
+                  deviance=full_logit_model$deviance, 
+                  r2 = 1 - full_logit_model$deviance/full_logit_model$null.deviance,
+                  aic = full_logit_model$aic, auc = auc(rocCurve), AICc = aicc(full_logit_model))
+
+model_2 <- as.data.frame(glance(full_logit_model))
+
+results_2 <- cbind(results_2, model_2)
+
+results <- rbind(results,results_2)
+
+```
+
+
+#### Model Summary
+
+In this model F1 score and AUC is lower than the first model and also many variables are insignificant. 
+
+### Model 3:
+
+In the 3rd model, we have kept the significant variables only from the previous model.
+
+```{r}
+significant_logit_model <- glm(target ~ chas + nox + tax + ptratio + dis_new + indus_high_ind + rm_new, family="binomial", data=training_set)
+
+summary(significant_logit_model) 
+
+```
+
+
+#### Model Statistics
+
+```{r}
+test_set$significant_logit_model <- ifelse(predict.glm(significant_logit_model, test_set,"response") >= 0.5,1,0)
+cm_model3 <- confusionMatrix(factor(test_set$significant_logit_model), factor(test_set$target),"1")
+
+cm_model3
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(significant_logit_model)
+```
+
+#### AUC Curve
+
+
+```{r}
+
+rocCurve <- roc(response = test_set$target, 
+                predictor = test_set$significant_logit_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+# Model Stats
+results_3 <- tibble(model = "significant_logit_model",predictors = 7,F1 = cm_model3$byClass[7],
+                  deviance=significant_logit_model$deviance, 
+                  r2 = 1 - significant_logit_model$deviance/significant_logit_model$null.deviance,
+                  aic = significant_logit_model$aic, auc = auc(rocCurve), AICc = aicc(significant_logit_model))
+
+model_3 <- as.data.frame(glance(significant_logit_model))
+
+results_3 <- cbind(results_3, model_3)
+
+results <- rbind(results,results_3)
+
+```
+
+
+#### Model Summary
+
+In this model AIC is higher than the other two models. But the F1 and AUC scores are lower than the first and second model. 
+
+### Model 4: Automatic Selection Stepwise Model
+
+For our last model, we'll fit a binary logistic regression using a stepwise regression procedure, with variable selection occurring in both forward and backward directions.
+
+For simplicity, we'll only include first order terms, but we'll open up the pool of candidate variables to all variables in our data set-using transformed versions of our variables, where applicable. There is one exception though: we exclude rad_high due to its extremely high correlation with tax_high.
+
+```{r}
+model.upper <- glm(target ~ zn + indus_high_ind + chas + nox_inv + rm_new + age_new + dis_new + tax_high_ind + ptratio + lstat_new + medv_new,family="binomial",data=training_set)
+model.null = glm(target ~ 1, 
+                 data=training_set,
+                 family = "binomial")
+stepwise_model <- step(model.null, scope = list(upper=model.upper, lower = model.null),
+                 trace = 0, direction = 'both')
+summary(stepwise_model)
+```
+
+#### Model Statistics
+
+```{r}
+test_set$stepwise_model <- ifelse(predict.glm(stepwise_model, test_set,"response") >= 0.5,1,0)
+cm_model4 <- confusionMatrix(factor(test_set$stepwise_model), factor(test_set$target),"1")
+
+cm_model4
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(stepwise_model)
+```
+
+#### AUC Curve
+
+
+```{r}
+
+rocCurve <- roc(response = test_set$target, 
+                predictor = test_set$stepwise_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+# Model Stats
+results_4 <- tibble(model = "stepwise_model",predictors = 7,F1 = cm_model4$byClass[7],
+                  deviance=stepwise_model$deviance, 
+                  r2 = 1 - stepwise_model$deviance/stepwise_model$null.deviance,
+                  aic = stepwise_model$aic, auc = auc(rocCurve), AICc = aicc(stepwise_model))
+
+model_4 <- as.data.frame(glance(stepwise_model))
+
+results_4 <- cbind(results_4, model_4)
+
+results <- rbind(results,results_4)
+
+```
+
+
+#### Model Summary
+
+In this model F1 and AUC scores are identical to first model and higher than the other two models. 
+
+## PART IV: Selecting Models
+
+### Compare Key statistics
+
+The table below summarizes the model statistics for all four of our models. The models are listed from left to right in accordance with the order in which they were described in Part III.
+
+The p-value does not indicate a statistically significant difference. Now let's compare all three model fits, using AIC, corrected AIC, BIC, and loglikehood values.
+
+```{r}
+results %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+
+```
+
+
+Based on the above table, AIC, AICc and BIC provide a consistent interpretation of model fits:
+
+Model 1 has the second highest AIC, AICc, and BIC values, which is indicative of poor relative fit.
+Model 2 has lower AIC and AICc but slightly higher BIC than those of Model 1. The interpretation is that Model 2 is superior to Model 1. Based on similar observation Model 2 is superior to Model 3 as well.
+Model 3 has higher AIC, AICc, and BIC, compared to Model 1,2 and 4.
+Model 4 has smallest BIC of all 4 models, smaller AIC and AICc compared to model 1 and model 3 which indicates a superior model fit.
+
+### Model Interpretation
+
+Between the four models, we decide to select model 4 as the best model based on the above analysis.
+
+```{r}
+model_coefficients <- cm_model4$byClass
+
+model_coefficients %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+
+```
+Our model has relatively high values of sensitivity and specificity. We conclude that our model is fairly strong. Our last step is to judge our model against a test data set.
+
+### Model Prediction
+
+```{r}
+
+eval_df$predict_target <- ifelse(predict.glm(stepwise_model, eval_df,"response") >= 0.5,1,0)
+
+
+eval_df %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+```
+
+
+### Model output
+
+```{r}
+# export to .csv for submission
+write.csv(eval_df, file = "C:/CUNY/Semester4(Spring)/DATA 621/Assignments/Homework3/Output/crime_logistic_regression_model_submission.csv",row.names = FALSE)
+```
+Our model prediction output can be found in the below GitHub location -
+
+[Model Output](https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_3/Output/crime_logistic_regression_model_submission.csv)
+
