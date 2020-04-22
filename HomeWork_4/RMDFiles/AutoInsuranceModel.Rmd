@@ -1,0 +1,790 @@
+---
+title: "DATA 621 - Homework4 - Auto Insurance Prediction Model"
+author: "Soumya Ghosh"
+date: "April 19, 2020"
+always_allow_html: yes
+output:
+  html_document:
+    df_print: kable
+    theme: cerulean
+    highlight: pygments
+    css: ./lab.css
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 5
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r warning=FALSE, message=FALSE}
+library(kableExtra)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(corrplot)
+library(RColorBrewer)
+library(GGally)
+library(ggResidpanel)
+library(psych)
+library(mice)
+library(reshape2)
+library(cowplot)
+library(car)
+library(caTools)
+library(VIM)
+library(broom)
+library(pROC)
+library(caret)
+library(geoR)
+library(moments)
+library(glmulti)
+```
+
+## Introduction
+
+In this homework assignment, we will explore, analyze and model a data set containing approximately 8000 records representing a customer at an auto insurance company. Each record has two response variables. The first response variable, TARGET_FLAG, is a 1 or a 0. A "1" means that the person was in a car crash. A zero means that the person was not in a car crash. The second response variable is TARGET_AMT. This value is zero if the person did not crash their car. But if they did crash their car, this number will be a value greater than zero.
+
+We will analyze insurance data to estimate the following quantities:
+
+ - The probability that a specified driver will have a car crash.
+ - The dollar cost of auto claims, given that the insured was involved in a crash.
+
+In practice, these claim frequency and severity measures are useful for determining appropriate pure premium amounts to charge auto policyholders.
+
+
+## Objective
+
+Our objective is to leverage the provided training data set, to build two separate models:
+
+ - A binary logistic regression to determine crash probabilities.
+ - A multiple linear regression model to estimate claim severity.
+
+We will then make predictions on the provided insurance testing data set.
+
+Below is a short description of the features present in the training data set:
+
+
+![](https://github.com/soumya2g/CUNYDataMiningHomeWork/blob/master/HomeWork_4/Images/FeaturesTable.PNG?raw=true)
+
+
+## Data Load
+
+Loaded Training and Evalutaion data sets into respective data frames.
+
+```{r}
+train_df <- read.csv("https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_4/DataFiles/insurance_training_data.csv")
+
+eval_df <- read.csv("https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_4/DataFiles/insurance-evaluation-data.csv")
+
+```
+## Training Data
+
+Sample snapshot of training data frame -
+
+```{r}
+
+head(train_df, 20) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+str(train_df)
+
+```
+
+Based on the above summary, we see below issues with certain fields -
+
+  - Currency fields like INCOME, HOME_VAL, BLUEBOOK, OLDCLAIM etc. were treated as factors due to "$" and "," characters.
+  - Multiple character field entries included an extraneous "z_" or "<" prefix.
+
+
+## PART I: Data Exploration
+
+### Data Cleansing & Transoformation
+
+We wanted to start off data exploration process with cleaning up the issues that we observed above -
+
+```{r}
+#Transform data
+
+#this step is necessary in order to analyze data as it is not clean
+currencyconv = function(input) {
+  out = sub("\\$", "", input)
+  out = as.numeric(sub(",", "", out))
+  return(out)
+}
+
+# Replace spaces with underscores
+zunderscore = function(input) {
+  out = sub("\\z_","", input)
+  return(out)
+}
+
+# Replace spaces with underscores
+leftbracket = function(input) {
+  out = sub("\\<", "", input)
+  return(out)
+}
+
+# Apply Conversion Logic : Training Data Frame
+train_df <- train_df %>% mutate(INCOME = currencyconv(INCOME), 
+                                HOME_VAL = currencyconv(HOME_VAL),
+                                BLUEBOOK = currencyconv(BLUEBOOK),
+                                OLDCLAIM = currencyconv(OLDCLAIM),
+                                MSTATUS = zunderscore(MSTATUS),
+                                SEX = zunderscore(SEX),
+                                EDUCATION = zunderscore(EDUCATION),
+                                EDUCATION = leftbracket(EDUCATION),
+                                JOB = zunderscore(JOB),
+                                CAR_TYPE = zunderscore(CAR_TYPE),
+                                URBANICITY = zunderscore(URBANICITY))
+
+# Apply Conversion Logic : Evaluation Data Frame
+eval_df <- eval_df %>% mutate(INCOME = currencyconv(INCOME), 
+                                HOME_VAL = currencyconv(HOME_VAL),
+                                BLUEBOOK = currencyconv(BLUEBOOK),
+                                OLDCLAIM = currencyconv(OLDCLAIM),
+                                MSTATUS = zunderscore(MSTATUS),
+                                SEX = zunderscore(SEX),
+                                EDUCATION = zunderscore(EDUCATION),
+                                EDUCATION = leftbracket(EDUCATION),
+                                JOB = zunderscore(JOB),
+                                CAR_TYPE = zunderscore(CAR_TYPE),
+                                URBANICITY = zunderscore(URBANICITY))
+
+# Exclude INDEX attribute from the data frame
+train_df <- train_df %>% dplyr::select(-INDEX)
+eval_df <- eval_df %>% dplyr::select(-INDEX)
+
+```
+
+### Descriptive Statistical Summary
+
+Next step of data exploration process involves high level descriptive statistical summary and missing/exception value analysis. 
+
+
+```{r warning=FALSE, message=FALSE}
+
+stat_summary <- function(df){
+  df %>%
+    summary() %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+    scroll_box(width="100%",height="400px")
+}
+stat_summary(train_df)
+
+```
+From the above we can see that there are certainfeatures with missing values. We will handle these issues in a further step towards improving data quality.
+
+
+We also used describe() function of 'psych' package to summarize additional statistical measurements like Standard Deviation, Skewness, Kurtois, Standard Error etc.
+
+
+```{r}
+stat_desc <- function(df){
+df %>% 
+    describe() %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+}
+
+stat_desc(train_df)
+
+```
+### Missing Value Analysis
+
+Below we have applied imputation technique for the features that has NA values. 
+
+```{r}
+## Counts of missing data per feature
+train_na_df <- data.frame(apply(train_df, 2, function(x) length(which(is.na(x)))))
+train_na_df1 <- data.frame(apply(train_df, 2,function(x) {sum(is.na(x)) / length(x) * 100}))
+
+train_na_df <- cbind(Feature = rownames(train_na_df), train_na_df, train_na_df1)
+colnames(train_na_df) <- c('Feature Name','No. of NA Recocrds','Percentage of NA Records')
+rownames(train_na_df) <- NULL
+
+
+train_na_df%>% filter(`No. of NA Recocrds` != 0) %>% arrange(desc(`No. of NA Recocrds`)) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+```
+
+### Imputation
+
+Imputing the missing data for the other 4 features, which we are keeping for our analysis. We have used the 'Predictive Mean Matching'(pmm) method included in MICE package for imputation purposes.
+
+```{r warning=FALSE, message=FALSE}
+
+impute_data <- function(df){
+  
+  df <- mice(data = df, m = 1, method = "pmm", maxit = 5, seed = 500)
+  df <- mice::complete(df, 1)
+}
+
+train_df <- impute_data(train_df)
+eval_df <- impute_data(eval_df)
+
+```
+Below we have applied imputation technique for the features that has NA values per the table above. 
+
+
+### Descriptive Statistical Plots
+
+#### Box Plots
+
+```{r fig.height=10, fig.width=10, warning=FALSE, message=FALSE}
+
+## Box plots:
+
+gb1 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = TARGET_AMT)) + geom_boxplot()
+gb2 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = AGE)) + geom_boxplot()
+gb3 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = BLUEBOOK)) + geom_boxplot()
+gb4 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = CAR_AGE)) + geom_boxplot()
+gb5 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = CLM_FREQ)) + geom_boxplot()
+gb6 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = HOMEKIDS)) + geom_boxplot()
+gb7 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = HOME_VAL)) + geom_boxplot()
+gb8 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = INCOME)) + geom_boxplot()
+gb9 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = KIDSDRIV)) + geom_boxplot()
+gb10 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = MVR_PTS)) + geom_boxplot()
+gb11 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = OLDCLAIM)) + geom_boxplot()
+gb12 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = TRAVTIME)) + geom_boxplot()
+gb13 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = TIF)) + geom_boxplot()
+gb14 <- ggplot(data = train_df, aes(x = as.factor(TARGET_FLAG), y = YOJ)) + geom_boxplot()
+
+
+
+plot_grid(gb1, gb2, gb3, gb4, gb5, gb6, gb7, gb8, gb9, gb10,
+          gb11, gb12, gb13, gb14, labels = "AUTO, scale = 8")
+
+```
+
+
+#### Density Plots
+
+```{r fig.height=8, fig.width=10}
+train_df %>% dplyr::select(TARGET_AMT,AGE,BLUEBOOK,CAR_AGE,CLM_FREQ,HOMEKIDS,HOME_VAL,INCOME,KIDSDRIV,MVR_PTS,OLDCLAIM,TRAVTIME,TIF,YOJ) %>%
+  gather(variable, value) %>%
+  ggplot(., aes(value)) + 
+  geom_density(fill = "dodgerblue4", color="dodgerblue4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+
+```
+
+### Observations Summary 
+
+- Only AGE is normally distributed
+- Further log like transformation is required for some of teh other attributes
+
+
+## PART II: Data Preparation
+
+We applied log transformation for features like HOMEKIDS, MVR_PTS, OLDCLAIM, TIF, KIDSDRIV, CLM_FREQ etc.
+
+```{r}
+
+### Apply Transofrmation on Train Data Frame
+
+train_df$HOMEKIDS <- log(train_df$HOMEKIDS+1)
+train_df$MVR_PTS <- log(train_df$MVR_PTS+1)
+train_df$OLDCLAIM <- log(train_df$OLDCLAIM+1)
+train_df$TIF <- log(train_df$TIF+1)
+train_df$KIDSDRIV <- log(train_df$KIDSDRIV+1)
+train_df$CLM_FREQ <- log(train_df$CLM_FREQ+1)
+
+### Apply Transofrmation on Evaluation Data Frame
+
+eval_df$HOMEKIDS <- log(eval_df$HOMEKIDS+1)
+eval_df$MVR_PTS <- log(eval_df$MVR_PTS+1)
+eval_df$OLDCLAIM <- log(eval_df$OLDCLAIM+1)
+eval_df$TIF <- log(eval_df$TIF+1)
+eval_df$KIDSDRIV <- log(eval_df$KIDSDRIV+1)
+eval_df$CLM_FREQ <- log(eval_df$CLM_FREQ+1)
+
+```
+
+### Correlation Plot
+
+```{r fig.height=8, fig.width=8}
+
+trainnum_df <- dplyr::select_if(train_df, is.numeric)
+corrMatrix <- round(cor(trainnum_df),4)
+
+corrMatrix %>% corrplot(., method = "color", outline = T, addgrid.col = "darkgray", order="hclust", addrect = 4, rect.col = "black", rect.lwd = 5,cl.pos = "b", tl.col = "indianred4", tl.cex = 1.0, cl.cex = 1.0, addCoef.col = "white", number.digits = 2, number.cex = 0.8, col = colorRampPalette(c("darkred","white","dodgerblue4"))(100))
+
+```
+Based on the Correlation plot above, there is a high degree of collinearity amogst independent variables like **OLDCLAIM** and **CLM_FREQ** etc.
+
+### Handling multicollinearity
+
+**OLDCLAIM and CLM_FREQ:** correlation value of 0.97. We are particularly concerned about the multicollinearity effects of these two variables. The fact that these two variables are nearly perfectly correlated indicates that one of them can legitimately be removed from the data set, and we chose **OLDCLAIM** to be removed from our model for further analysis.
+
+
+```{r}
+train_df <- train_df %>% dplyr::select(-c(OLDCLAIM))
+eval_df <- eval_df %>% dplyr::select(-c(OLDCLAIM))
+
+```
+#### Pair-wise Relationships  
+  
+Let's look at scatter plot/correlation matrix to get a better feel for the relationships between pairs of variables.  In the figure below, we plotted the high crime areas in blue and the low crime areas in green.  We also included a loess curve in the scatter plots to get a better feel for the relationship between variables.    
+  
+```{r fig.retina=1, fig.width=15, fig.height=15}
+cols = c('red','blue')
+trainnum_df$TARGET_FLAG_MOD <- factor(ifelse(trainnum_df$TARGET_FLAG == 1 , 'y', 'n'))
+
+panel.cor <- function(x,y, digits = 2, cex.cor, ...) {
+  usr <- par("usr"); on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r <- cor(x,y)
+  txt <- format(c(r, 0.123456789), digits = digits)[1]
+  text(0.5,0.5, txt, cex =sqrt(abs(r*6)))
+  
+}
+pairs(trainnum_df[,1:15],  col= cols[trainnum_df$TARGET_FLAG_MOD], gap=0.3, lower.panel = panel.smooth, upper.panel = panel.cor, cex.labels = 3)
+```
+
+### Feature Engineering
+
+In binary logistic regression, it is desirable to have predictor variables that are normally distributed, whenever possible. The data in the crime dataset presents some factors that would lead us to have to perform some "Transformations" on the data. These transformation include adding categorical variables, log of variables, and adding power transformations etc.
+
+**AGE:** This variable is slightly left skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$AGE)
+```
+
+We are not going to perform any transformation on AGE.  
+
+**BLUEBOOK:** This variable is significantly right skewed. The level of skewness is as below -
+
+```{r}
+skewness(train_df$BLUEBOOK)
+```
+
+We perform the box-cox procedure to determine an appropriate transformation:
+
+```{r}
+boxcoxfit(train_df$BLUEBOOK)
+
+```
+
+We applied necessary transformation based on output from box-cox to variables like BLUEBOOK.
+
+```{r}
+
+train_df$BLUEBOOK_MOD  <- train_df$BLUEBOOK^0.46
+eval_df$BLUEBOOK_MOD  <- eval_df$BLUEBOOK^0.46
+
+```
+
+### Data Preparation Results
+
+After making feature removal and additional feature engineering steps, below is the summary of all  available features -
+
+```{r warning=FALSE, message=FALSE}
+stat_desc(train_df)
+
+str(train_df)
+
+```
+
+
+## PART III: Building Models
+
+### Test train approach
+
+We have divided the traning dataset into training and test sets using a 80/20 split. We will build our models on the training set and evaluate it on the test set.
+
+```{r}
+set.seed(123)
+split <- sample.split(train_df$TARGET_FLAG, SplitRatio = 0.8)
+training_set <- subset(train_df, split == TRUE)
+test_set <- subset(train_df, split == FALSE)
+
+```
+Below is the list of complete list of variables before we embark on Model building process -
+
+```{r}
+str(training_set)
+```
+
+We will build four different models to see which one yields the best performance. 
+
+### Build LOGIT Model for TARGET_FLAG 
+
+#### Model 1:
+
+We will start off with a model with all the original variables excluding any derived features -
+
+```{r}
+baseline_logit_model <- glm(TARGET_FLAG~. -TARGET_AMT,data=training_set, family="binomial" (link="logit"))
+
+summary(baseline_logit_model) 
+
+```
+
+
+#### Model Statistics
+
+```{r}
+
+test_set$baseline_logit_model <- ifelse(predict.glm(baseline_logit_model, test_set,"response") >= 0.5,1,0)
+cm_model1 <- confusionMatrix(factor(test_set$baseline_logit_model), factor(test_set$TARGET_FLAG),"1")
+
+cm_model1
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(baseline_logit_model) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+```
+
+#### AUC Curve
+
+
+```{r}
+
+rocCurve <- roc(response = test_set$TARGET_FLAG, 
+                predictor = test_set$baseline_logit_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+# Model Stats
+results <- tibble(model = "baseline_logit_model",predictors = 11,F1 = cm_model1$byClass[7],
+                  deviance=baseline_logit_model$deviance, 
+                  r2 = 1 - baseline_logit_model$deviance/baseline_logit_model$null.deviance,
+                  aic=baseline_logit_model$aic, auc = auc(rocCurve), AICc = aicc(baseline_logit_model))
+
+model <- as.data.frame(glance(baseline_logit_model))
+
+results <- cbind(results, model)
+
+```
+
+
+
+### Model 2:
+
+In the 2nd model, we have added all the variables including the signficant features from model1.
+
+```{r}
+full_logit_model <- glm(TARGET_FLAG ~ KIDSDRIV + MSTATUS + TRAVTIME + BLUEBOOK + TIF + CLM_FREQ + MVR_PTS + BLUEBOOK_MOD ,family="binomial",data=training_set)
+
+summary(full_logit_model) 
+
+```
+
+
+#### Model Statistics
+
+```{r}
+test_set$full_logit_model <- ifelse(predict.glm(full_logit_model, test_set,"response") >= 0.5,1,0)
+cm_model2 <- confusionMatrix(factor(test_set$full_logit_model), factor(test_set$TARGET_FLAG),"1")
+
+cm_model2
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(full_logit_model)
+```
+
+#### AUC Curve
+
+```{r}
+
+rocCurve <- roc(response = test_set$TARGET_FLAG, 
+                predictor = test_set$full_logit_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+
+
+# Model Stats
+results_2 <- tibble(model = "full_logit_model",predictors = 19,F1 = cm_model2$byClass[7],
+                  deviance=full_logit_model$deviance, 
+                  r2 = 1 - full_logit_model$deviance/full_logit_model$null.deviance,
+                  aic = full_logit_model$aic, auc = auc(rocCurve), AICc = aicc(full_logit_model))
+
+model_2 <- as.data.frame(glance(full_logit_model))
+
+results_2 <- cbind(results_2, model_2)
+
+results <- rbind(results,results_2)
+
+```
+
+
+#### Model Summary
+
+In this model F1 score and AUC is lower than the first model and also many variables are insignificant. 
+
+### Model 3: Automatic Selection Stepwise Model
+
+For our last model, we'll fit a binary logistic regression using a stepwise regression procedure, with variable selection occurring in both forward and backward directions.
+
+For simplicity, we'll only include first order terms, but we'll open up the pool of candidate variables to all variables in our data set-using transformed versions of our variables, where applicable. There is one exception though: we exclude rad_high due to its extremely high correlation with tax_high.
+
+```{r}
+model.upper <- glm(TARGET_FLAG ~ KIDSDRIV + INCOME + PARENT1 + HOME_VAL + MSTATUS + EDUCATION + JOB + TRAVTIME + CAR_USE + BLUEBOOK_MOD + TIF + CAR_TYPE + CLM_FREQ + REVOKED + MVR_PTS + URBANICITY, family="binomial",data=training_set)
+model.null = glm(TARGET_FLAG ~ 1, 
+                 data=training_set,
+                 family = "binomial")
+stepwise_model <- step(model.null, scope = list(upper=model.upper, lower = model.null),
+                 trace = 0, direction = 'both')
+summary(stepwise_model)
+```
+
+#### Model Statistics
+
+```{r}
+test_set$stepwise_model <- ifelse(predict.glm(stepwise_model, test_set,"response") >= 0.5,1,0)
+cm_model3 <- confusionMatrix(factor(test_set$stepwise_model), factor(test_set$TARGET_FLAG),"1")
+
+cm_model3
+
+```
+
+#### VIF Results
+
+Multicollinearity can assessed by computing a score called the Variance Inflation Factor (or VIF), which measures how much the variance of a regression coefficient is inflated due to multicollinearity in the model. 
+
+```{r}
+vif(stepwise_model)
+```
+
+#### AUC Curve
+
+
+```{r}
+
+rocCurve <- roc(response = test_set$TARGET_FLAG, 
+                predictor = test_set$stepwise_model)
+
+
+## Plot the ROC Curve:
+plot(rocCurve, legacy.axes = TRUE, main = "ROC Curve using pROC",print.auc = TRUE)
+
+# Model Stats
+results_3 <- tibble(model = "stepwise_model",predictors = 7,F1 = cm_model3$byClass[7],
+                  deviance=stepwise_model$deviance, 
+                  r2 = 1 - stepwise_model$deviance/stepwise_model$null.deviance,
+                  aic = stepwise_model$aic, auc = auc(rocCurve), AICc = aicc(stepwise_model))
+
+model_3 <- as.data.frame(glance(stepwise_model))
+
+results_3 <- cbind(results_3, model_3)
+
+results <- rbind(results,results_3)
+
+```
+
+
+#### Model Summary
+
+In this model F1 and AUC scores are identical to first model and higher than the other two models. 
+
+
+### Multiple Linear Regression (TARGET_AMT Variable) : Model 1
+
+```{r}
+g1 <- lm(TARGET_AMT ~ . -TARGET_FLAG, data = training_set)
+
+summary(g1) 
+
+```
+
+#### Model Diagnostic Plots
+
+```{r fig.height=12, fig.width=12}
+
+resid_panel(g1, plots='default', smoother = TRUE)
+
+```
+
+
+#### RMSE Calculation
+
+```{r}
+rmse_calc <- function(actual, predicted) {
+  rmse_val <- sqrt(sum((actual - predicted)^2) / length(actual))
+  
+  return(rmse_val)
+}
+
+### RMSE of first model - training dataset
+rmse_calc(training_set$TARGET_AMT, predict(g1, newdata = training_set))
+### RMSE of first model - test dataset
+rmse_calc(test_set$TARGET_AMT, predict(g1, newdata = test_set))
+```
+
+
+#### Model Summary
+
+We have used the glance() methid from broom package to gather the model summary statistics in one data frame and appended our RMSE calculations so that we can compare these statistics in the model selection section.
+
+
+```{r}
+reg_model_1 <- as.data.frame(glance(g1))
+reg_model_1$Train_RMSE <- rmse_calc(training_set$TARGET_AMT, predict(g1, newdata = training_set))
+reg_model_1$Test_RMSE <- rmse_calc(test_set$TARGET_AMT, predict(g1, newdata = test_set))
+
+```
+
+
+### Multiple Linear Regression: Model 2
+
+```{r}
+g2 <- lm(TARGET_AMT ~ KIDSDRIV + INCOME + HOME_VAL + TRAVTIME , data = training_set)
+
+
+summary(g2)
+```
+
+#### Model Diagnostic Plots
+
+```{r fig.height=8, fig.width=8}
+
+resid_panel(g2, plots='default', smoother = TRUE)
+```
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of second model - training dataset
+rmse_calc(training_set$TARGET_AMT, predict(g2, newdata = training_set))
+### RMSE of second model - test dataset
+rmse_calc(test_set$TARGET_AMT, predict(g2, newdata = test_set))
+```
+
+
+#### Model Summary
+
+```{r}
+reg_model_2 <- as.data.frame(glance(g2))
+reg_model_2$Train_RMSE <- rmse_calc(training_set$TARGET_AMT, predict(g2, newdata = training_set))
+reg_model_2$Test_RMSE <- rmse_calc(test_set$TARGET_AMT, predict(g2, newdata = test_set))
+
+```
+### Stepwise Linear Regression: Model 3
+
+For the fourth model, we have used backward elimination process with all variables plus higher order polynomials for the features. We have used the stepAIC() function from MASS package, which choose the best model by AIC. 
+
+```{r}
+
+full_formula <- "TARGET_AMT ~ AGE + HOMEKIDS + YOJ + INCOME + HOME_VAL + TRAVTIME + TIF + CLM_FREQ + MVR_PTS + CAR_AGE + I(AGE^2) + I(HOMEKIDS^2) + I(YOJ^2) + I(INCOME^2) + I(HOME_VAL^2) + I(TRAVTIME^2) + I(TIF^2) + I(CLM_FREQ^2) + I(MVR_PTS^2) + I(CAR_AGE^2)"
+
+reg_full_model <- lm(full_formula, training_set)
+
+reg_step_model <- stepAIC(reg_full_model, direction = "backward", 
+                      trace = FALSE)
+
+summary(reg_step_model)
+```
+
+#### Model Diagnostic Plots
+
+```{r fig.height=8, fig.width=8}
+
+resid_panel(reg_step_model, plots='default', smoother = TRUE)
+
+```
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of fourth model - training dataset
+rmse_calc(training_set$TARGET_AMT, predict(reg_step_model, newdata = training_set))
+### RMSE of fourth model - test dataset
+rmse_calc(test_set$TARGET_AMT, predict(reg_step_model, newdata = test_set))
+```
+
+#### Model Summary
+
+```{r}
+reg_model_3 <- as.data.frame(glance(reg_step_model))
+reg_model_3$Train_RMSE <- rmse_calc(training_set$TARGET_AMT, predict(reg_step_model, newdata = training_set))
+reg_model_3$Test_RMSE <- rmse_calc(test_set$TARGET_AMT, predict(reg_step_model, newdata = test_set))
+```
+
+## PART IV: Selecting Models
+
+### Compare Key Regression Model statistics
+
+The table below summarizes the model statistics for all 3 of our Regression models. The models are listed from left to right in accordance with the order in which they were described in Part III.
+
+```{r}
+reg_model_summary <- rbind(reg_model_1,reg_model_2,reg_model_3)
+
+reg_Model_Name <- c('Model 1(All Features)','Model 2 (Selective Features)','Model 3(Stepwise - Backward Elimination)')
+
+reg_model_summary <- t(reg_model_summary) 
+colnames(reg_model_summary) <- reg_Model_Name
+
+reg_model_summary %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+
+```
+Although Model1 has maximum Adjusted R square and minimum RMSE values, we still decided to go with Model3 (Stepwise model) for prediction.
+
+### Compare Key LOGIT Model statistics
+
+The table below summarizes the model statistics for all 3 of our models. The models are listed from left to right in accordance with the order in which they were described in Part III.
+
+The p-value does not indicate a statistically significant difference. Now let's compare all three model fits, using AIC, corrected AIC, BIC, and loglikehood values.
+
+```{r}
+results %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+
+```
+
+
+Based on the above table, AIC, AICc and BIC provide a consistent interpretation of model fits:
+
+**Model 3 (Stepwise model)** has smallest BIC of all 3 models, smaller AIC and AICc compared to model 1 and model 2 which indicates a superior model fit.
+
+### Model Prediction
+
+```{r}
+
+eval_df$TARGET_FLAG <- ifelse(predict.glm(stepwise_model, eval_df,"response") >= 0.5,1,0)
+
+TargetPred <- round(predict(reg_step_model, newdata = eval_df),2)
+
+eval_df$TARGET_AMT <- ifelse(TargetPred < 0,0, TargetPred)
+
+
+eval_df %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+```
+
+
+### Model output
+
+```{r}
+# export to .csv for submission
+write.csv(eval_df, file = "C:/CUNY/Semester4(Spring)/DATA 621/Assignments/Homework4/Output/auto_insurance_model_submission.csv",row.names = FALSE)
+```
+Our model prediction output can be found in the below GitHub location -
+
+[Model Output](https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_4/Output/auto_insurance_model_submission.csv)
+
