@@ -1,0 +1,520 @@
+---
+title: "DATA 621 - Homework5 - Wine Sales Prediction Count Regression Model"
+author: "Soumya Ghosh"
+date: "May 10, 2020"
+always_allow_html: yes
+output:
+  pdf_document: default
+  html_document:
+    df_print: kable
+    theme: cerulean
+    highlight: pygments
+    css: ./lab.css
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r warning=FALSE, message=FALSE}
+library(kableExtra)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(corrplot)
+library(RColorBrewer)
+library(GGally)
+library(ggResidpanel)
+library(psych)
+library(mice)
+library(reshape2)
+library(cowplot)
+library(car)
+library(caTools)
+library(VIM)
+library(broom)
+library(pROC)
+library(caret)
+library(geoR)
+library(moments)
+library(glmulti)
+library(pscl)
+```
+
+## Introduction
+
+In this homework assignment, we will explore, analyze and model a data set containing information on approximately 12,000 commercially available wines. The variables are mostly related to the chemical properties of the wine being sold. The response variable is the number of sample cases of wine that were purchased by wine distribution companies after sampling a wine. These cases would be used to provide tasting samples to restaurants and wine stores around the United States. The more sample cases purchased, the more likely is a wine to be sold at a high end restaurant. A large wine manufacturer is studying the data in order to predict the number of wine cases ordered based upon the wine characteristics. If the wine manufacturer can predict the number of cases, then that manufacturer will be able to adjust their wine offering to maximize sales.
+
+Our dataset consists of 15 variables about different qualities. A wine producer might be able to use this data, along with the target variable, number of cases purchased by restaurants, to determine what qualities consumers are looking for in wines and to be able to plan accordingly.
+
+```{r}
+vr <- c("INDEX", "TARGET", "AcidIndex", "Alcohol", "Chlorides", "CitricAcid", "Density", "FixedAcidity", "FreeSulfurDioxide", "LabelAppeal", "ResidualSugar", "STARS", "Sulphates", "TotalSulfurDioxide", "VolatileAcidity", "pH")
+
+def <- c("Identification Variable (do not use)", "Number of Cases Purchased", "Proprietary method of testing total acidity of wine by using a weighted average", "Alcohol Content", "Chloride content of wine", "Citric Acid Content", "Density of Wine", "Fixed Acidity of Wine", "Sulfur Dioxide content of wine", "Marketing Score indicating the appeal of label design for consumers. High numbers suggest customers like the label design. Negative numbers suggest customes don't like the design.", "Residual Sugar of wine", "Wine rating by a team of experts. 4 Stars = Excellent, 1 Star = Poor", "Sulfate conten of wine", "Total Sulfur Dioxide of Wine", "Volatile Acid content of wine", "pH of wine")
+
+te <- c("None", "None", "", "",  "", "", "", "",  "", "Many consumers purchase based on the visual appeal of the wine label design. Higher numbers suggest better sales", "", "A high number of stars suggests high sales",  "", "", "", "")
+
+kable(cbind(vr, def, te), col.names = c("Variable Name", "Definition", "Theoretical Effect")) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+```
+
+
+
+## Objective
+
+Our objective is to build a count regression model to predict the number of cases of wine that will be sold given certain properties of the wine. HINT: Sometimes, the fact that a variable is missing is actually predictive of the target. You can only use the variables given to you (or variables that you derive from the variables provided). 
+
+
+## Data Load
+
+Loaded Training and Evalutaion data sets into respective data frames.
+
+```{r}
+train_df <- read.csv("https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_5/DataFiles/wine-training-data.csv")
+
+eval_df <- read.csv("https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_5/DataFiles/wine-evaluation-data.csv")
+
+```
+## Training Data
+
+Sample snapshot of training data frame -
+
+```{r}
+
+head(train_df, 20) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+str(train_df)
+
+```
+
+
+## PART I: Data Exploration
+
+### Data Cleansing & Transoformation
+
+We wanted to start off data exploration process with cleaning up the issues that we observed above -
+
+```{r}
+
+# Exclude INDEX attribute from the data frame
+train_df <- train_df %>% dplyr::select(-"ï..INDEX")
+
+```
+
+### Descriptive Statistical Summary
+
+Next step of data exploration process involves high level descriptive statistical summary and missing/exception value analysis. 
+
+
+```{r warning=FALSE, message=FALSE}
+
+stat_summary <- function(df){
+  df %>%
+    summary() %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+    scroll_box(width="100%",height="400px")
+}
+stat_summary(train_df)
+
+```
+From the above we can see that there are certain features with missing values. We will handle these issues in a further step towards improving data quality.
+
+
+We also used describe() function of 'psych' package to summarize additional statistical measurements like Standard Deviation, Skewness, Kurtois, Standard Error etc.
+
+
+```{r}
+stat_desc <- function(df){
+df %>% 
+    describe() %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+}
+
+stat_desc(train_df)
+
+```
+### Missing Value Analysis
+
+Below we have applied imputation technique for the features that has NA values. 
+
+```{r}
+## Counts of missing data per feature
+train_na_df <- data.frame(apply(train_df, 2, function(x) length(which(is.na(x)))))
+train_na_df1 <- data.frame(apply(train_df, 2,function(x) {sum(is.na(x)) / length(x) * 100}))
+
+train_na_df <- cbind(Feature = rownames(train_na_df), train_na_df, train_na_df1)
+colnames(train_na_df) <- c('Feature Name','No. of NA Recocrds','Percentage of NA Records')
+rownames(train_na_df) <- NULL
+
+
+train_na_df%>% filter(`No. of NA Recocrds` != 0) %>% arrange(desc(`No. of NA Recocrds`)) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+```
+
+### Imputation
+
+Imputing the missing data for the other 4 features, which we are keeping for our analysis. We have used the 'Predictive Mean Matching'(pmm) method included in MICE package for imputation purposes.
+
+```{r warning=FALSE, message=FALSE}
+
+impute_data <- function(df){
+  
+  df <- mice(data = df, m = 1, method = "pmm", maxit = 5, seed = 500)
+  df <- mice::complete(df, 1)
+}
+
+train_df <- impute_data(train_df)
+eval_df <- impute_data(eval_df)
+
+```
+Below we have applied imputation technique for the features that has NA values per the table above. 
+
+
+### Descriptive Statistical Plots
+
+#### Box Plots
+
+```{r fig.height=10, fig.width=10, warning=FALSE, message=FALSE}
+
+## Box plots:
+gb1 <- ggplot(data = train_df, aes(y = TARGET)) + geom_boxplot()
+gb2 <- ggplot(data = train_df, aes(y = FixedAcidity)) + geom_boxplot()
+gb3 <- ggplot(data = train_df, aes(y = VolatileAcidity)) + geom_boxplot()
+gb4 <- ggplot(data = train_df, aes(y = CitricAcid)) + geom_boxplot()
+gb5 <- ggplot(data = train_df, aes(y = ResidualSugar)) + geom_boxplot()
+gb6 <- ggplot(data = train_df, aes(y = Chlorides)) + geom_boxplot()
+gb7 <- ggplot(data = train_df, aes(y = FreeSulfurDioxide)) + geom_boxplot()
+gb8 <- ggplot(data = train_df, aes(y = TotalSulfurDioxide)) + geom_boxplot()
+gb9 <- ggplot(data = train_df, aes(y = Density)) + geom_boxplot()
+gb10 <- ggplot(data = train_df, aes(y = pH)) + geom_boxplot()
+gb11 <- ggplot(data = train_df, aes(y = Sulphates)) + geom_boxplot()
+gb12 <- ggplot(data = train_df, aes(y = Alcohol)) + geom_boxplot()
+gb13 <- ggplot(data = train_df, aes(y = LabelAppeal)) + geom_boxplot()
+gb14 <- ggplot(data = train_df, aes(y = AcidIndex)) + geom_boxplot()
+gb15 <- ggplot(data = train_df, aes(y = STARS)) + geom_boxplot()
+
+
+plot_grid(gb1, gb2, gb3, gb4, gb5, gb6, gb7, gb8, gb9, gb10,
+          gb11, gb12, gb13, gb14, gb15, labels = "AUTO, scale = 8")
+```
+
+
+#### Density Plots
+
+```{r fig.height=8, fig.width=10}
+train_df %>% dplyr::select(TARGET,FixedAcidity,VolatileAcidity,CitricAcid,ResidualSugar,Chlorides,FreeSulfurDioxide,TotalSulfurDioxide,Density,pH,Sulphates,Alcohol,LabelAppeal,AcidIndex,STARS) %>%
+  gather(variable, value) %>%
+  ggplot(., aes(value)) + 
+  geom_density(fill = "dodgerblue4", color="dodgerblue4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+
+```
+
+### Observations Summary 
+
+The above shows that most of the data is more or less normally distributed. There are some values such as *Sulphates*, *Chlorides*, *VolatileAcidity*, *CitricAcid*, *ResidualSugar*, *FixedAcid*, *FreeSulfurDioxide*, and *TotalSulfurDioxide* that have negative values. After taking a closer look at these data points, it is likely that the creator of this dataset ended up standardizing the data. Because the data is already normally distributed and the test (eval) dataset is also likely structured in this way, we will not be making any adjustments to this data.
+
+
+It would be interesting to see if there were any correlations between the independent variables to independent variables, and independent variables to the dependent variable.
+
+
+## PART II: Data Preparation
+
+### Correlation Plot
+
+```{r fig.height=8, fig.width=8}
+
+trainnum_df <- dplyr::select_if(train_df, is.numeric)
+corrMatrix <- round(cor(trainnum_df),4)
+
+corrMatrix %>% corrplot(., method = "color", outline = T, addgrid.col = "darkgray", order="hclust", addrect = 4, rect.col = "black", rect.lwd = 5,cl.pos = "b", tl.col = "indianred4", tl.cex = 1.0, cl.cex = 1.0, addCoef.col = "white", number.digits = 2, number.cex = 0.8, col = colorRampPalette(c("darkred","white","dodgerblue4"))(100))
+
+```
+In the correlation plot above, we see, *STARS* and *LabelAppeal* are most positively correlated variables with the response variable. We expected this because our variable description mentions these variable's theoretical effect are higher than other variables. Also, we some mild negative correlation between the response variable and *AcidIndex* variable.
+
+
+### Feature Engineering
+
+In binary logistic regression, it is desirable to have predictor variables that are normally distributed, whenever possible. The data in the crime dataset presents some factors that would lead us to have to perform some "Transformations" on the data. These transformation include adding categorical variables, log of variables, and adding power transformations etc.
+
+
+## PART III: Building Models
+
+### Test train approach
+
+We have divided the traning dataset into training and test sets using a 80/20 split. We will build our models on the training set and evaluate it on the test set.
+
+```{r}
+set.seed(123)
+split <- sample.split(train_df$TARGET, SplitRatio = 0.8)
+training_set <- subset(train_df, split == TRUE)
+test_set <- subset(train_df, split == FALSE)
+
+```
+Below is the list of complete list of variables before we embark on Model building process -
+
+```{r}
+str(training_set)
+```
+
+We will build two different Poisson regression models using dataset with and without imputed values, two different negative binomial regression models using stepwise variables selection and imputed variables, and two multiple linear regression models using stepwise variables selection and imputed variables to see which model yields the best performance.
+
+### Build Poisson Regression Models
+
+#### Model 1 (Poisson Regression):
+
+We will start off with a model with all the original variables excluding any derived features -
+
+```{r}
+poisson_model_1 <- glm(TARGET ~ ., family=poisson, data=training_set)
+poisson_model_1 <- step(poisson_model_1, direction="backward")
+summary(poisson_model_1)
+
+```
+
+All of these variables appear to have minor but have statistically significant impact. Overall, it does appear that the more citric, sulfur dioxide containing, alcohol, label appeal, and stars that the observation had, the more likely the case was going to sell. Likewise, the less acid, more dense, more sulphates, and more chlorides, the less likely the wine was going to sell cases.
+
+#### RMSE Calculation
+
+```{r}
+rmse_calc <- function(actual, predicted) {
+  rmse_val <- sqrt(sum((actual - predicted)^2) / length(actual))
+
+  return(rmse_val)
+}
+
+### RMSE of first model - training dataset
+model1_rmse_train <- mean(rmse_calc(training_set$TARGET, predict(poisson_model_1, newdata = training_set)))
+### RMSE of first model - test dataset
+model1_rmse_test <- mean(rmse_calc(test_set$TARGET, predict(poisson_model_1, newdata = test_set)))
+
+model1_aic <- poisson_model_1$aic
+```
+
+
+### Model 2 (Poisson Regression Model 2 - Zero-inflated):
+
+"Zero-inflated poisson regression is used to model count data that has an excess of zero counts. Further, theory suggests that the excess zeros are generated by a separate process from the count values and that the excess zeros can be modeled independently. Thus, the zip model has two parts, a poisson count model and the logit model for predicting excess zeros."
+
+Reference: https://www.theanalysisfactor.com/zero-inflated-poisson-models-for-count-outcomes/
+
+"The Poisson distribution assumes that each count is the result of each Poisson process - a random process that says each counted event is independent and equally likely. If this count variable is used as the outcome of a regression model, we can use Poisson regression to estimate how predictors affect the number of times the devent occurred."
+
+"But sometimes, it's just a matter of having too many zeros that a Poisson would predict. In this case, a better solution is often the Zero-Inflated Poisson (ZIP) model.ZIP models assume that some zeros occurred by a Poisson process.The ZIP model fits, simultaneously, two separate regression models. One is a logistic model that models the probability of being eligible for a non-zero count. The other models the size of that count."
+
+"Both models use the same predictor variables, but estimate their coefficients separately. So the predictors can have vastly different effects on the two processes."
+
+Below is the second model utilizing ZIP.
+
+
+```{r}
+poisson_model_2 <- zeroinfl(TARGET ~ ., data = training_set)
+summary(poisson_model_2)
+poisson_model_2$coefficients
+
+```
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of first model - training dataset
+model2_rmse_train <- mean(rmse_calc(training_set$TARGET, predict(poisson_model_2, newdata = training_set)))
+### RMSE of first model - test dataset
+model2_rmse_test <- mean(rmse_calc(test_set$TARGET, predict(poisson_model_2, newdata = test_set)))
+
+model2_aic <- poisson_model_2$aic
+
+```
+#### Poisson models comparison statistic
+
+It is interesting to compare the zero inflated Poisson model to the original Poisson model. There does appear to be some differences, but even more interesting is the differences in direction (positive and negative) of the independent variables. For instance, the density of the wine is positive in $count, but negative in $zero (any many other variables). It is unclear why this is, but we will certainly keep this in the back of our mind.
+
+Is the zero-inflated model better than the standard Poisson regression model? We will perform the Vuong test between the two models.
+
+```{r}
+# Vuong
+vuong(poisson_model_1, poisson_model_2) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+```
+
+"The Vuong test compares the zero-inflated model with an ordinary Poisson regression model." The test statistic is significant indicating that the zero-inflated model is superior to the standard Poisson model.
+
+
+
+"A Poisson distribution is parameterized by $\lambda$, which happens to be both its mean and variance. While convenient, it's not often realistic. A distribution of counts will usually have a variance that's not equal to its mean. When we see this happen with data that we assume is (or hope) is Poisson distributed, we say we have under- or overdispersion, depending on if the variance is smaller or larger than the mean. Performing Poisson regression on count data that exhibits this behavior results in a model that doesn't fit well."
+
+"One approach that addresses this issue is the Negative Binomial Regresion. The negative binomial distribution describes the probabilities of the occurrence of whole numbers greater than or equal to 0. Unlike the Poisson distribution, the variance and the mean are not equivalent. This suggests it might serve as a useful approximation for modeling counts with variability different from its mean. The variance of a negative binomial distribution is a function of its mean and has an additional parameter, k, called the dispersion parameter. Say our count is a random variable Y from a negative binomial distribution, when the variance of Y is:"
+
+$var(Y)\quad =\quad \mu \quad +\quad { \mu  }^{ 2 }lk$
+
+"As the dispersion parameter gets larger and larger, the variance converges to the same value as the mean, and the negative binomial turns into a Poisson distribution."
+
+
+```{r}
+# Mean/Variance
+print(paste0("TARGET mean: ", round(mean(training_set$TARGET, 3))))
+print(paste0("TARGET variance: ", round(var(training_set$TARGET),3)))
+```
+
+### Model 3: Negative Binomial Regression
+
+So there appears to be a slight overdispersion with the variance greater than the mean. Let's apply a negative binomial model for model 3.
+
+
+```{r}
+
+negative_binomial_3 <- glm.nb(TARGET ~ ., data=training_set)
+summary(negative_binomial_3)
+
+```
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of first model - training dataset
+model3_rmse_train <- mean(rmse_calc(training_set$TARGET, predict(negative_binomial_3, newdata = training_set)))
+### RMSE of first model - test dataset
+model3_rmse_test <- mean(rmse_calc(test_set$TARGET, predict(negative_binomial_3, newdata = test_set)))
+
+model3_aic <- negative_binomial_3$aic
+
+```
+
+### Model 4: Negative Binomial
+
+In our negative binomial regression model below, we use forward and backward step-wise variables selection algorithm. This model is only slightly better with a lower AIC score.
+
+```{r warning=FALSE, message=FALSE}
+# negative binomial regression with stepwise variable selection
+negative_binomial_4 <- stepAIC(negative_binomial_3, direction = "both", trace = FALSE)
+summary(negative_binomial_4)
+```
+
+Not surprisingly, this negative binomial model performed slightly worse than the previous negative binomial model. I suspect that the transformation had lost some key information. (Again, notable is that the beta values of the independent variables are similar to the beta values of the prior negative binomial model.)
+
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of first model - training dataset
+model4_rmse_train <- mean(rmse_calc(training_set$TARGET, predict(negative_binomial_4, newdata = training_set)))
+### RMSE of first model - test dataset
+model4_rmse_test <- mean(rmse_calc(test_set$TARGET, predict(negative_binomial_4, newdata = test_set)))
+
+model4_aic <- negative_binomial_4$aic
+
+```
+
+### Model 5: Multiple Linear Regression
+
+In our multiple linear regression model below, r-squared is 0.4594, which means this model explains 45.94% of the data's variation. As seen with previous models, FixedAcidity and ResidualSugar seem to have have no impact in this model. So far none of the model adequately explains the dataset.
+
+```{r}
+model5 <- lm(TARGET ~ ., data=training_set)
+summary(model5)
+
+```
+
+#### Model Diagnostic Plots
+
+```{r fig.height=12, fig.width=12}
+
+resid_panel(model5, plots='default', smoother = TRUE)
+
+```
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of first model - training dataset
+model5_rmse_train <- mean(rmse_calc(training_set$TARGET, predict(model5, newdata = training_set)))
+### RMSE of first model - test dataset
+model5_rmse_test <- mean(rmse_calc(test_set$TARGET, predict(model5, newdata = test_set)))
+
+model5_aic <- model5$aic
+
+```
+
+### Model 6: Multiple Linear Regression
+
+In our last model using multiple linear regression with forward and backward step-wise variables selection algorithm, we see a similar output as model 5. R-squared is 0.4594, which means this model explains 45.94% of the data's variation.
+
+```{r}
+# multiple linear regression with stepwise variable selection
+model6 <- stepAIC(model5, direction = "both", trace = FALSE)
+summary(model6)
+
+```
+
+#### Model Diagnostic Plots
+
+```{r fig.height=8, fig.width=8}
+
+resid_panel(model6, plots='default', smoother = TRUE)
+```
+
+#### RMSE Calculation
+
+```{r}
+### RMSE of first model - training dataset
+model6_rmse_train <- mean(rmse_calc(training_set$TARGET, predict(model6, newdata = training_set)))
+### RMSE of first model - test dataset
+model6_rmse_test <- mean(rmse_calc(test_set$TARGET, predict(model6, newdata = test_set)))
+
+model6_aic <- model6$aic
+
+```
+
+## PART IV: Selecting Models
+
+### Compare Key Regression Model statistics
+
+The table below summarizes the model statistics for all 3 of our Regression models. The models are listed from left to right in accordance with the order in which they were described in Part III.
+
+```{r}
+# metrics
+Train_RMSE <- list(model1_rmse_train, model2_rmse_train, model3_rmse_train, model4_rmse_train, model5_rmse_train, model6_rmse_train)
+Test_RMSE <- list(model1_rmse_test, model2_rmse_test, model3_rmse_test, model4_rmse_test, model5_rmse_test, model6_rmse_test)
+
+AIC <- list(model1_aic, model2_aic, model3_aic, model4_aic, model5_aic, model6_aic)
+
+kable(rbind(Train_RMSE, Test_RMSE, AIC), col.names = c("Model 1", "Model 2", "Model 3", "Model 4", "Model 5", "Model 6"))  %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+
+```
+
+To make prediction, we will select one of our count regression model. The criteria for our selection for the best count regression model will be the AIC score and mean squared error of the model. Based on the table above, model 1 is our best model. 
+
+### Model Prediction
+
+```{r}
+lm_predicted <- round(predict(poisson_model_1, newdata = eval_df),0)
+
+lm_predicted_df <- as.data.frame(cbind(eval_df$IN, lm_predicted))
+
+colnames(lm_predicted_df) <- c('INDEX','TARGET_WINS')
+
+lm_predicted_df %>% kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%  scroll_box(width="100%",height="300px")
+```
+
+
+### Model output
+
+```{r}
+# export to .csv for submission
+write.csv(lm_predicted_df, file = "C:/CUNY/Semester4(Spring)/DATA 621/Assignments/Homework5/Output/Wine_Sales_Prediction.csv",row.names = FALSE)
+```
+Our model prediction output can be found in the below GitHub location -
+
+[Model Output](https://raw.githubusercontent.com/soumya2g/CUNYDataMiningHomeWork/master/HomeWork_5/Output/Wine_Sales_Prediction.csv)
+
